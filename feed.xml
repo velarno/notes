@@ -3,10 +3,135 @@
     <title>Arno&#x27;s Notebook</title>
     <link href="https://velarno.github.io/notes/feed.xml" rel="self" />
     <link href="https://velarno.github.io/notes" />
-    <updated>1970-01-01T01:00:00+01:00</updated>
+    <updated>2025-07-01T23:31:47+02:00</updated>
     <author>
         <name>Arno Veletanlic</name>
     </author>
     <id>https://velarno.github.io/notes</id>
 
+    <entry>
+        <title>Scraping the Copernicus Data Store</title>
+        <author>
+            <name>Arno Veletanlic</name>
+        </author>
+        <link href="https://velarno.github.io/notes/scraping-the-copernicus-data-store/"/>
+        <id>https://velarno.github.io/notes/scraping-the-copernicus-data-store/</id>
+            <category term="yq"/>
+            <category term="web"/>
+            <category term="uv"/>
+            <category term="scraping"/>
+            <category term="python"/>
+            <category term="pup"/>
+            <category term="html"/>
+
+        <updated>2025-07-01T23:25:09+02:00</updated>
+            <summary>
+                <![CDATA[
+                    I'm currently looking into the Copernicus Data Store website, and after playing a bit with their API, I was looking for a way to automate&hellip;
+                ]]>
+            </summary>
+        <content type="html">
+            <![CDATA[
+                <p>I'm currently looking into <a href="https://cds.climate.copernicus.eu/datasets"  target="_blank"  class="extlink extlink-icon-1" title="Copernicus Data Store" rel="noopener">the Copernicus Data Store website</a>, and after playing a bit with <a href="https://cds.climate.copernicus.eu/how-to-api"  class="extlink extlink-icon-1" title="CDS Official API page" >their API</a>, I was looking for a way to automate away some of my most recurrent data queries.</p>
+<p>But to do anything, you need to have basic information about the datasets CDS provides, and unfortunately their API does not provide a ready-made endpoint to list datasets and their properties/tags.</p>
+<h1>Getting a list of site URLs</h1>
+<h1>HTML approach using `pup`</h1>
+<p><a href="https://github.com/ericchiang/pup"  target="_blank"  class="extlink extlink-icon-1" title="Pup Github" rel="noopener">Pup CLI</a> is a neat tool to quickly parse web content from the command line.</p>
+<p>First, let's fetch the dataset homepage and store it locally:</p>
+<pre class="language-bash"><code>curl -sL "https://cds.climate.copernicus.eu/datasets" &gt; /tmp/copernicus.home.html</code></pre>
+<p>This file is a mess. I quickly piped it to a LLM (I currently use <a href="https://www.cursor.com/"  target="_blank"  class="extlink extlink-icon-1" title="Cursor IDE" rel="noopener noreferrer">cursor</a>, but a local LLM would do just fine) to figure out the main HTML attributes I should look for to get a <code>href</code> that stats with <code>/datasets/{dataset_id}</code> and sure enough, I have my first pup command:</p>
+<pre class="language-bash"><code>pup \
+'a[tabindex="-1"][aria-hidden="true"][href^="/datasets/"]' \
+-f /tmp/copernicus.home.html --color</code></pre>
+<p>This does not display enough information for my taste, but at least I have the href, here's a single anchor (the commands outputs as many of these as can be found on the site's page)</p>
+<pre class="language-html"><code>&lt;a tabindex="-1" aria-hidden="true" href="/datasets/sis-european-wind-storm-reanalysis?tab=overview"&gt;
+ &lt;img src="https://cds.climate.copernicus.eu/thumbnails/CwM-xKhoypuPMSljaAxDe0x1KAU=/150x0/filters:format(webp)/object-store.os-api.cci2.ecmwf.int/cci2-prod-catalogue/resources/sis-european-wind-storm-reanalysis/overview_9f914bdde4609de684d1d0c3b71136a26290a31d70fa3772e9980eb9a678cd11.png" alt="" class="w-[150px] h-[150px] hidden md:block object-contain" loading="lazy"&gt;
+&lt;/a&gt;</code></pre>
+<p>The only interesting thing in here is the anchor's <code>href</code> attribute, so let's modify the command to only get these:</p>
+<pre class="language-bash"><code>pup \
+'a[tabindex="-1"][aria-hidden="true"][href^="/datasets/"] attr{href}' \
+-f /tmp/copernicus.home.html \
+--color</code></pre>
+<p>and what we get is a beautiful list of links !</p>
+<pre class="language-bash"><code>/datasets/satellite-soil-moisture?tab=overview
+/datasets/reanalysis-era5-single-levels?tab=overview
+/datasets/derived-era5-single-levels-daily-statistics?tab=overview
+/datasets/derived-utci-historical?tab=overview
+/datasets/reanalysis-era5-land-timeseries?tab=overview
+# ... list goes on</code></pre>
+<h2>How many links did we fetch ?</h2>
+<p>Our goal is to fetch all the datasets currently published by the Copernicus CDS, so let's check we have a number close to 123, increasing the <code>limit</code> might be helpful</p>
+<pre class="language-bash"><code>curl -sL 'https://cds.climate.copernicus.eu/datasets?q=&amp;limit=150' | \
+pup 'article a[href$="?tab=overview"][href^="/datasets/"]:not([aria-hidden]) attr{href}' | \
+wc -l</code></pre>
+<p>This sadly only returns <code>30</code>, most likely because the CDS search URL has a lazy-loading feature which only loads the first 30 datasets.</p>
+<h1>Sitemap approach with `yq`</h1>
+<p>By checking various info about the site, I noticed the <code>/sitemap.xml</code> endpoint had a lot of information about <code>/datasets/</code> pages, so let's try using this instead, we'll need <a href="https://mikefarah.gitbook.io/yq"  target="_blank"  class="extlink extlink-icon-1" title="yq documentation" rel="noopener noreferrer">the yq CLI</a>.</p>
+<pre class="language-bash"><code>curl -sL 'https://cds.climate.copernicus.eu/sitemap.xml' \
+&gt; /tmp/coperniucs.sitemap.xml \
+&amp;&amp; yq \
+'.urlset.url[] | select(.loc | contains("/datasets/")) | .loc' \
+/tmp/coperniucs.sitemap.xml -o=json \
+| wc -l</code></pre>
+<p>This unfortunately returns only <code>50</code> - let's try the most powerful approach next.</p>
+<h1>Using playwright with `uv`</h1>
+<p>The next best thing to a bash script is a script you can easily run without installing multiple dependencies. After a bit of back-and-forth, I ended up with the <a href="https://gist.github.com/velarno/fba2ade917502c4ca795a0e88712b812"  target="_blank"  class="extlink extlink-icon-1" title="gist python script playwright" rel="noopener noreferrer">following python script</a>. Noteworthy bits are:</p>
+<ol>
+<li>Few dependencies, allowing easy one-liners with <code>uv run</code></li>
+<li>Uses <code>page.evaluate("window.scrollY")</code> in a loop to scroll to the bottom of the page (idea is from <a href="https://www.xiegerts.com/post/infinite-scroll-scrapy-playwright/"  target="_blank"  class="extlink extlink-icon-1" title="xiegerts post infinite scroll scraping" rel="noopener">this neat blogpost</a>)</li>
+<li>Parses every <code>&lt;article&gt;</code> element and nested elements to get dataset information</li>
+<li>Outputs everything as a clean JSON object</li>
+</ol>
+<p>If you want a quick summary of these key steps, I'll cover these below.</p>
+<h2>Dependencies</h2>
+<p>This script only requires <code>playwright</code>, with the caveat that playwright needs to be initialized by running <code>playwright install</code> in the terminal. We use a subprocess for this, it's not ideal but it works.</p>
+<pre class="language-python"><code>import asyncio
+import subprocess
+from playwright.async_api import async_playwright
+
+subprocess.run(["playwright", "install"], check=True) # install playwright
+
+URL = "https://cds.climate.copernicus.eu/datasets"</code></pre>
+<h2>Infinite Scroll scraping</h2>
+<p>In order to avoid the infinite scroll issue we stumbled into before, we scroll in a loop until scrolling isn't possible (we assume the timeout is enough to load the next batch of data, adjust it if needed)</p>
+<pre class="language-python"><code># Scroll using window.scrollBy and window.scrollY until the bottom
+last_position = await page.evaluate("window.scrollY")
+while True:
+   await page.evaluate("window.scrollBy(0, 700)")
+   await page.wait_for_timeout(750)
+   current_position = await page.evaluate("window.scrollY")
+   if current_position == last_position:
+        break
+   last_position = current_position</code></pre>
+<p>This is a bit slow (multiple 750ms waits), so ideally you would add logging or progress update output, but here we're just prototyping.</p>
+<h2>Parsing the data</h2>
+<p>Getting all the relevant dataset information involves pretty boring HTML parsing, but we see similarities with the <code>pup</code> commands we used above:</p>
+<pre class="language-python"><code>link_el = await article.query_selector("a[href*='/datasets/']")</code></pre>
+<p>this fetches the same anchors as the pup scripts. One thing that would be a bit difficult to do with <code>pup</code> is perhaps the mix of very different queries to get all the relevant information. One vaguely interesting aspect is fetching dataset "tags" which are displayed as <code>&lt;button&gt;</code> and <code>input</code> elements:</p>
+<pre class="language-python"><code># Tags (checkboxes/buttons)
+tag_els = await article.query_selector_all(
+    (
+        "button, [role='checkbox']," +
+        " .cds-portal-tag," +
+        " .cds-portal-chip," +
+        " input[type='checkbox'] + label"
+    )
+)
+tags = []
+for tag_el in tag_els:
+    tag_text = await tag_el.inner_text()
+    if tag_text:
+        tags.append(tag_text.strip())</code></pre>
+<h2>The one-liner script</h2>
+<p>If you want to test this script, it's quite simple to run it with <code>uv run</code> since it supports remote scripts:</p>
+<pre class="language-python"><code>uv run --with playwright \
+https://gist.githubusercontent.com/velarno/fba2ade917502c4ca795a0e88712b812/raw/88f816389c13b53bc402ed9edc3f41db87c33443/fetch_cds_datasets.py</code></pre>
+<p>Here's the first few lines of the output, confirming we can fetch all datasets:</p>
+<pre class="language-bash"><code>Installed 4 packages in 33ms
+Found 123 datasets
+{'link': '/datasets/derived-utci-historical?tab=overview', 'title': 'Thermal comfort indices derived from ERA5 reanalysis', 'description': 'This dataset provides a complete historical reconstruction for a set of indices representing human thermal stress and discomfort in outdoor conditions. This dataset, also known as ERA5-HEAT (Human thErmAl comforT) represents the current state-of-the-art for bioclimatology data record production. The...', 'tags': ['Reanalysis', 'Copernicus C3S', 'Global', 'Past', 'Atmosphere (surface)', 'Atmosphere (upper air)']}</code></pre>
+<p>Hooray ! 🥳 That's all for today, in the next few days I'll probably clean this up and keep working on CDS related datasets. I might post one or two notes if I come across anything noteworthy.</p>
+            ]]>
+        </content>
+    </entry>
 </feed>
